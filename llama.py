@@ -44,7 +44,8 @@ class RMSNorm(torch.nn.Module):
             torch.Tensor: The normalized tensor.
         """
         # todo
-        raise NotImplementedError
+        r_RMS = x.pow(2).mean(-1, keepdim=True).add(self.eps).rsqrt()
+        return x * r_RMS   
 
     def forward(self, x):
         """
@@ -94,7 +95,15 @@ class Attention(nn.Module):
         attention matrix before applying it to the value tensor.
         '''
         # todo
-        raise NotImplementedError
+        # query (bs, n_local_heads, seqlen, head_dim)
+        # key (bs, n_local_heads, seqlen, head_dim)
+        # value (bs, n_local_heads, seqlen, head_dim)
+        # compute Attention(Q, K, V) = softmax(QK^T / sqrt(d_k))V
+        attn_scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        attn_scores = F.softmax(attn_scores, dim=-1) # (bs, n_local_heads, seqlen, seqlen)
+        attn_scores = self.attn_dropout(attn_scores)
+        output = torch.matmul(attn_scores, value) # (bs, n_local_heads, seqlen, head_dim)
+        return output
 
     def forward(
         self,
@@ -109,7 +118,7 @@ class Attention(nn.Module):
         https://ai.plainenglish.io/understanding-llama2-kv-cache-grouped-query-attention-rotary-embedding-and-more-c17e5f49a6d7
         for details.
         '''
-        batch_size, seqlen, _ = x.shape
+        batch_size, seqlen, _ = x.shape # _ is embedding size
 
         query = self.compute_query(x)
         key = self.compute_key(x)
@@ -197,7 +206,22 @@ class LlamaLayer(nn.Module):
            output of the feed-forward network
         '''
         # todo
-        raise NotImplementedError
+        # x (bs, seqlen, _)
+        # 1) layer normalization of the input
+        x = self.attention_norm(x)
+        # 2) self-attention on the layer-normalized input
+        attn_output = self.attention(x)
+        # 3) a residual connection
+        x = x + attn_output
+        # 4) layer normalization on the output of the self-attention
+        x = self.attention_norm(x)
+        # 5) a feed-forward network on the layer-normalized output of the self-attention
+        ffn_output = self.feed_forward(x)
+        # 6) add a residual connection
+        x = x + ffn_output
+        # 7) layer normalization on the output of the feed-forward network
+        x = self.ffn_norm(x)
+        return x
 
 class Llama(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
@@ -245,7 +269,7 @@ class Llama(LlamaPreTrainedModel):
 
         for layer in self.layers:
             h = layer(h)
-        h = self.norm(h)
+        h = self.norm(h) # (bs, seqlen, dim)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
@@ -267,18 +291,18 @@ class Llama(LlamaPreTrainedModel):
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         Also note this is a super inefficient version of sampling with no key/value cache.
         """
+        # idx (bs, seqlen)
         for _ in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.params.max_seq_len else idx[:, -self.params.max_seq_len:]
+            idx_cond = idx if idx.size(1) <= self.params.max_seq_len else idx[:, -self.params.max_seq_len:] # (bs, seqlen)
             # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
-            logits = logits[:, -1, :] # crop to just the final time step
+            logits = logits[:, -1, :] # crop to just the final time step # (bs, vocab_size)
             # todo
-            raise NotImplementedError
 
             if temperature == 0.0:
                 # select the single most likely index
-                idx_next = None
+                idx_next = torch.argmax(logits, dim=-1, keepdim=True) # (bs, 1)
             else:
                 '''
                 Perform temperature sampling:
@@ -289,10 +313,10 @@ class Llama(LlamaPreTrainedModel):
 
                 Note that we are not using top-k sampling/nucleus sampling in this procedure.
                 '''
-                idx_next = None
+                prob = F.softmax(logits / temperature, dim=-1) # (bs, vocab_size)
+                idx_next = torch.multinomial(prob, num_samples=1) # (bs, 1) # by default, sample from each row
             # append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_next), dim=1)
-
+            idx = torch.cat((idx, idx_next), dim=1) # (bs, seqlen)
 
         return idx
 
