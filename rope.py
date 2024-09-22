@@ -18,7 +18,7 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
         AssertionError: If the target tensor 'x' doesn't have the expected number of dimensions.
     """
     ndim = x.ndim
-    print(f"freqs_cis.shape: {freqs_cis.shape}, x.shape: {x.shape}")
+    # print(f"freqs_cis.shape: {freqs_cis.shape}, x.shape: {x.shape}")
     assert 0 <= 1 < ndim
     assert freqs_cis.shape == (x.shape[1], x.shape[-1])
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]

@@ -44,8 +44,7 @@ class RMSNorm(torch.nn.Module):
             torch.Tensor: The normalized tensor.
         """
         # todo
-        r_RMS = x.pow(2).mean(-1, keepdim=True).add(self.eps).rsqrt()
-        return x * r_RMS   
+        return x / torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
 
     def forward(self, x):
         """
@@ -99,9 +98,10 @@ class Attention(nn.Module):
         # key (bs, n_local_heads, seqlen, head_dim)
         # value (bs, n_local_heads, seqlen, head_dim)
         # compute Attention(Q, K, V) = softmax(QK^T / sqrt(d_k))V
-        attn_scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        attn_scores = F.softmax(attn_scores, dim=-1) # (bs, n_local_heads, seqlen, seqlen)
-        attn_scores = self.attn_dropout(attn_scores)
+        attn_scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(query.size(-1))
+        attn_scores = attn_scores.softmax(dim=-1) # (bs, n_local_heads, seqlen, seqlen)
+        if self.attn_dropout is not None:
+            attn_scores = self.attn_dropout(attn_scores)
         output = torch.matmul(attn_scores, value) # (bs, n_local_heads, seqlen, head_dim)
         return output
 
@@ -208,20 +208,17 @@ class LlamaLayer(nn.Module):
         # todo
         # x (bs, seqlen, _)
         # 1) layer normalization of the input
-        x = self.attention_norm(x)
+        attn_norm = self.attention_norm(x)
         # 2) self-attention on the layer-normalized input
-        attn_output = self.attention(x)
+        attn_output = self.attention(attn_norm)
         # 3) a residual connection
-        x = x + attn_output
+        residual = x + attn_output
         # 4) layer normalization on the output of the self-attention
-        x = self.attention_norm(x)
+        layer_norm = self.ffn_norm(residual)
         # 5) a feed-forward network on the layer-normalized output of the self-attention
-        ffn_output = self.feed_forward(x)
+        ffn_output = self.feed_forward(layer_norm)
         # 6) add a residual connection
-        x = x + ffn_output
-        # 7) layer normalization on the output of the feed-forward network
-        x = self.ffn_norm(x)
-        return x
+        return residual + ffn_output
 
 class Llama(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
