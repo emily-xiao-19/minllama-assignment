@@ -18,6 +18,7 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
         AssertionError: If the target tensor 'x' doesn't have the expected number of dimensions.
     """
     ndim = x.ndim
+    print(f"freqs_cis.shape: {freqs_cis.shape}, x.shape: {x.shape}")
     assert 0 <= 1 < ndim
     assert freqs_cis.shape == (x.shape[1], x.shape[-1])
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
@@ -56,6 +57,7 @@ def apply_rotary_emb(
     # and Section 3 in https://arxiv.org/abs/2104.09864.
 
     # reshape xq and xk to match the complex representation
+    # query (batch_size, seqlen, n_local_heads, head_dim) -> (batch_size, seqlen, n_local_heads, head_dim, 2)
     query_real, query_imag = query.float().reshape(query.shape[:-1] + (-1, 2)).unbind(-1)
     key_real, key_imag = key.float().reshape(key.shape[:-1] + (-1, 2)).unbind(-1)
     # This separates each query/key vector into its odd and even indices (assuming *one-indexing*).
@@ -63,13 +65,21 @@ def apply_rotary_emb(
 
     # First, compute the trigonometric values in the second and fourth columns in
     # slide 22 (linked above).
+    freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2, device=device).float() / head_dim)) # theta_i (head_dim/2)
+    m = torch.arange(0, seqlen, device=device).float() # m (seqlen)
+    freqs = torch.outer(m, freqs) # m * theta_i (seqlen, head_dim/2)
+    cos_freqs, sin_freqs = torch.cos(freqs), torch.sin(freqs) # (seqlen, head_dim/2)
+    cos_freqs, sin_freqs = reshape_for_broadcast(cos_freqs, query_real), reshape_for_broadcast(sin_freqs, query_real) # (bs, seqlen, n_local_heads, head_dim/2)
 
     # Then, combine these trigonometric values with the tensors query_real, query_imag,
     # key_real, and key_imag.
+    query_real_rot = cos_freqs * query_real - sin_freqs * query_imag # (bs, seqlen, n_local_heads, head_dim/2)
+    query_imag_rot = sin_freqs * query_real + cos_freqs * query_imag # (bs, seqlen, n_local_heads, head_dim/2)
+    key_real_rot = cos_freqs * key_real - sin_freqs * key_imag # (bs, seqlen, n_local_kv_heads, head_dim/2)
+    key_imag_rot = sin_freqs * key_real + cos_freqs * key_imag # (bs, seqlen, n_local_kv_heads, head_dim/2)
 
-    raise NotImplementedError
+    # concatenate the real and imaginary parts of the rotated query and key tensors
+    query_out = torch.stack((query_real_rot, query_imag_rot), dim=-1).reshape(query.shape) # reshape performs interleaving by default
+    key_out = torch.stack((key_real_rot, key_imag_rot), dim=-1).reshape(key.shape)
 
-    query_out = None
-    key_out = None
-    # Return the rotary position embeddings for the query and key tensors
     return query_out, key_out

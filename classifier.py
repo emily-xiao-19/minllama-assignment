@@ -22,10 +22,10 @@ class LlamaZeroShotClassifier(torch.nn.Module):
 
 	def forward(self, input_ids):
 		# compute the completion probability of each label string
-		logits, _ = self.llama(input_ids)
-		log_probabilities = F.log_softmax(logits, dim=-1)
-		label_probabilities = torch.zeros((log_probabilities.shape[0], self.num_labels), device=log_probabilities.device)
-		for i, label_token_ids in enumerate(self.label_name_ids):
+		logits, _ = self.llama(input_ids) # (batch_size, seq_len, vocab_size)
+		log_probabilities = F.log_softmax(logits, dim=-1) # (batch_size, seq_len, vocab_size)
+		label_probabilities = torch.zeros((log_probabilities.shape[0], self.num_labels), device=log_probabilities.device) # (batch_size, num_labels)
+		for i, label_token_ids in enumerate(self.label_name_ids): # for each label
 			total_log_prob = torch.sum(log_probabilities[:, :, label_token_ids], axis=-1)
 			label_probabilities[:, i] = total_log_prob[:, 0]
 		return label_probabilities
@@ -54,5 +54,14 @@ class LlamaEmbeddingClassifier(torch.nn.Module):
 		   logits (unnormalized probabilities) over all classes.
 		3) Take the log-softmax of the logits and return log-probabilities over all classes.
 		'''
-		# todo
-		raise NotImplementedError
+		hidden_states, _ = self.llama(input_ids) # (batch_size, seq_len, hidden_size)
+		# Find the hidden state after the final token of the input sequence
+		last_hidden_state = hidden_states[:, -1, :] # (batch_size, hidden_size)
+		# Apply dropout
+		dropped_hidden_state = self.dropout(last_hidden_state)
+		# Pass this through the classifier head
+		logits = self.classifier_head(dropped_hidden_state)
+		# Take the log-softmax of the logits
+		log_probabilities = F.log_softmax(logits, dim=-1)
+		return log_probabilities
+
